@@ -1,3 +1,6 @@
+Fully vibecoded app which i find kind of usefull for own purposes. 
+
+
 # SSH Jumper
 
 A Windows tray application for reaching multiple TCP services through one ordered chain of SSH servers.
