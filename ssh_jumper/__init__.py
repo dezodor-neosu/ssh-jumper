@@ -1,0 +1,1 @@
+"""SSH Jumper desktop application."""
