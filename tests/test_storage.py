@@ -1,3 +1,4 @@
+import os
 from ssh_jumper.models import Forward, Hop, Profile
 from ssh_jumper.storage import Store
 
@@ -52,7 +53,7 @@ def test_v1_migrates_without_losing_credentials_and_keeps_backup(tmp_path):
     import json
     from ssh_jumper.storage import crypt
     store = Store(tmp_path / "profiles.json")
-    legacy = {"version": 1, "profiles": [{"name": "Old tunnel",
+    legacy = {"version": 1, "credential_backend": "dpapi" if os.name == "nt" else "secret-service-fernet-v1", "profiles": [{"name": "Old tunnel",
         "hops": [{"host": "jump", "username": "user", "auth": "Password",
                   "protected_password": base64.b64encode(crypt(b"old-secret")).decode()}],
         "local_port": 8443, "target_host": "device", "target_port": 443,
@@ -68,7 +69,7 @@ def test_v1_migrates_without_losing_credentials_and_keeps_backup(tmp_path):
     profiles[0].forwards.append(Forward(9000, "other-device", 9000))
     store.save(profiles)
     assert store.load() == profiles
-    assert json.loads(store.path.read_text())["version"] == 5
+    assert json.loads(store.path.read_text())["version"] == (5 if os.name == "nt" else 6)
     assert store.path.with_suffix(".v1.bak").read_text(encoding="utf-8") == original
 
 
@@ -99,7 +100,7 @@ def test_v3_alternatives_inherit_credentials_once_during_migration(tmp_path):
     from ssh_jumper.storage import crypt
     from ssh_jumper.models import HostEndpoint
     store = Store(tmp_path / "profiles.json")
-    old = {"version": 3, "profiles": [{"name": "Shared credentials", "hops": [{
+    old = {"version": 3, "credential_backend": "dpapi" if os.name == "nt" else "secret-service-fernet-v1", "profiles": [{"name": "Shared credentials", "hops": [{
         "host": "primary", "username": "alice", "auth": "Private key file", "key_file": "id_rsa",
         "protected_password": base64.b64encode(crypt(b"old-passphrase")).decode(),
         "multiple_hosts": True, "alternatives": [{"host": "backup", "port": 2222}]}],
@@ -115,3 +116,65 @@ def test_v3_alternatives_inherit_credentials_once_during_migration(tmp_path):
     assert store.load() == profiles
     assert "old-passphrase" not in store.path.read_text()
     assert json.loads(store.path.with_suffix(".v3.bak").read_text()) == old
+
+
+def test_keyring_failure_preserves_saved_profiles(tmp_path, monkeypatch):
+    import pytest
+    if os.name == "nt":
+        pytest.skip("Linux Secret Service")
+    from keyring.backends.SecretService import Keyring
+    store = Store(tmp_path / "profiles.json")
+    profile = Profile(hops=[Hop("jump", username="user", auth="Password", password="original")])
+    store.save([profile])
+    original = store.path.read_bytes()
+    def locked(*args):
+        raise RuntimeError("locked")
+    monkeypatch.setattr(Keyring, "get_password", locked)
+    with pytest.raises(RuntimeError, match="Unlock"):
+        store.load()
+    profile.hops[0].password = "changed"
+    with pytest.raises(RuntimeError, match="Unlock"):
+        store.save([profile])
+    assert store.path.read_bytes() == original
+
+
+def test_missing_key_is_not_replaced_on_load(tmp_path, monkeypatch):
+    import pytest
+    if os.name == "nt":
+        pytest.skip("Linux Secret Service")
+    from keyring.backends.SecretService import Keyring
+    store = Store(tmp_path / "profiles.json")
+    store.save([Profile(hops=[Hop("jump", password="secret")])])
+    monkeypatch.setattr(Keyring, "get_password", lambda *args: None)
+    def unexpected_write(*args):
+        pytest.fail("Decrypt must never generate a replacement key")
+    monkeypatch.setattr(Keyring, "set_password", unexpected_write)
+    with pytest.raises(RuntimeError):
+        store.load()
+
+
+def test_foreign_platform_secrets_are_rejected(tmp_path):
+    import json
+    import pytest
+    store = Store(tmp_path / "profiles.json")
+    store.path.write_text(json.dumps({"version": 6, "credential_backend": "foreign",
+        "profiles": [{"hops": [{"protected_password": "secret"}]}]}))
+    with pytest.raises(ValueError, match="another platform"):
+        store.load()
+
+
+def test_session_credentials_do_not_require_keyring(tmp_path, monkeypatch):
+    from ssh_jumper.models import HostEndpoint, SSHAuth
+    from ssh_jumper import storage
+    def unavailable(*args):
+        raise AssertionError("Session-only saving must not use credential storage")
+    monkeypatch.setattr(storage, 'crypt', unavailable)
+    store = Store(tmp_path / 'profiles.json')
+    profiles = [Profile(hops=[Hop('jump', password='primary', alternatives=[HostEndpoint('backup', password='alternative')])],
+                        forwards=[Forward(ssh=SSHAuth('user', 'Password', 'endpoint'))])]
+    store.save(profiles, save_credentials=False)
+    loaded = store.load()[0]
+    assert loaded.hops[0].password == ''
+    assert loaded.hops[0].alternatives[0].password == ''
+    assert loaded.forwards[0].ssh.password == ''
+    assert profiles[0].hops[0].password == 'primary'

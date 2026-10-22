@@ -7,6 +7,7 @@ from ssh_jumper.integrations import IntegrationSettings, SettingsStore, launch_e
 def test_editor_settings_roundtrip_and_migration(tmp_path):
     editor = tmp_path / "My Editor.exe"
     editor.write_bytes(b"editor")
+    editor.chmod(0o700)
     store = SettingsStore(tmp_path / "settings.json")
     assert store.load() == IntegrationSettings()
     store.path.write_text(json.dumps({"version": 1, "integrations": {"terminal": "KiTTY", "putty_path": "missing.exe"}}))
@@ -24,6 +25,7 @@ def test_editor_settings_roundtrip_and_migration(tmp_path):
 def test_launch_editor_keeps_arguments_separate(tmp_path, monkeypatch):
     editor = tmp_path / "My Editor.exe"
     editor.write_bytes(b"editor")
+    editor.chmod(0o700)
     file = tmp_path / "some file & name.ini"
     file.write_bytes(b"test")
     calls = []

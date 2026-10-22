@@ -216,6 +216,9 @@ def test_watchdog_rebuilds_after_ssh_drop():
 
 
 def test_both_agents_are_queried(monkeypatch):
+    import os
+    if os.name != "nt":
+        pytest.skip("Windows dual-agent discovery")
     from ssh_jumper import tunnel as module
     connections = []
     class FakeAgent:
@@ -544,3 +547,18 @@ def test_failover_uses_independent_username_auth_and_encrypted_key(tmp_path):
         finally:
             tunnel.disconnect()
             tunnel.thread.join(12)
+
+
+def test_linux_agent_discovery(monkeypatch):
+    import os
+    if os.name == "nt":
+        pytest.skip("Linux agent discovery")
+    from types import SimpleNamespace
+    closed = []
+    key = SimpleNamespace(asbytes=lambda: b"public-key")
+    monkeypatch.setattr(paramiko, "Agent", lambda: SimpleNamespace(
+        get_keys=lambda: [key], close=lambda: closed.append(True)))
+    agents = LocalAgents("All local agents", lambda _: None)
+    assert list(agents.keys()) == [key]
+    agents.close()
+    assert closed == [True]

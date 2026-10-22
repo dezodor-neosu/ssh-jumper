@@ -1,3 +1,4 @@
+import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 from ssh_jumper.models import Forward, Hop, HostEndpoint
 from ssh_jumper.storage import Store
@@ -135,6 +136,9 @@ def test_endpoint_auth_edit_copy_and_launch_controls(tmp_path, monkeypatch):
 
 
 def test_mstsc_launch_uses_active_rdp_forward(tmp_path, monkeypatch):
+    import os
+    if os.name != "nt":
+        pytest.skip("Windows RDP client")
     from types import SimpleNamespace
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Store(tmp_path / "profiles.json"))
@@ -269,3 +273,20 @@ def test_alternatives_use_full_host_editor_and_cancel_is_isolated(monkeypatch):
     assert original.alternatives == [HostEndpoint("backup", 2222, "bob", "Pageant")]
     editor.deleteLater()
     app.processEvents()
+
+
+def test_session_only_save_keeps_memory_credentials(tmp_path):
+    from ssh_jumper.models import Profile
+    app = QApplication.instance() or QApplication([])
+    store = Store(tmp_path / 'profiles.json')
+    store.save([Profile(hops=[Hop('jump', username='user', auth='Password', password='session-secret')])])
+    window = MainWindow(store)
+    try:
+        window.save_credentials.setChecked(False)
+        assert window.save_profile()
+        assert store.load()[0].hops[0].password == ''
+        assert window.capture().hops[0].password == 'session-secret'
+    finally:
+        window.tray.hide()
+        window.deleteLater()
+        app.processEvents()

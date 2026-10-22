@@ -1,9 +1,11 @@
+import os
 import socket
 import threading
 from pathlib import Path
 import paramiko
 from paramiko.agent import AgentSSH
-from paramiko import win_openssh, win_pageant
+if os.name == "nt":
+    from paramiko import win_openssh, win_pageant
 
 
 class LocalListenerError(OSError):
@@ -14,6 +16,12 @@ class LocalAgents:
     """Query both agents explicitly; Paramiko's default chooses only one."""
     def __init__(self, mode, log):
         self.agents = []
+        if os.name != "nt":
+            if mode in ("All local agents", "OpenSSH agent"):
+                agent = paramiko.Agent()
+                self.agents.append(agent)
+                log(f"OpenSSH agent: {len(agent.get_keys())} key(s) available")
+            return
         for name, module, factory in (
             ("OpenSSH agent", win_openssh, win_openssh.OpenSSHAgentConnection),
             ("Pageant", win_pageant, win_pageant.PageantConnection),
@@ -40,7 +48,7 @@ class LocalAgents:
 
     def close(self):
         for agent in self.agents:
-            agent._close()
+            agent.close() if os.name != "nt" else agent._close()
 
 
 class Forwarder:

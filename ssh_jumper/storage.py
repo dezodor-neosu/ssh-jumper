@@ -1,4 +1,4 @@
-"""Windows DPAPI protects credentials for the current Windows account."""
+"""Account-bound credential protection: Windows DPAPI or Linux Secret Service."""
 import base64
 import ctypes
 from ctypes import wintypes
@@ -15,6 +15,31 @@ class Blob(ctypes.Structure):
 
 
 def crypt(value: bytes, decrypt=False) -> bytes:
+    if os.name != "nt":
+        return linux_crypt(value, decrypt)
+    return dpapi_crypt(value, decrypt)
+
+
+def linux_crypt(value: bytes, decrypt=False) -> bytes:
+    from cryptography.fernet import Fernet
+    from keyring.backends.SecretService import Keyring
+    # Explicit backend: never accept an automatically selected plaintext backend.
+    backend = Keyring()
+    try:
+        key = backend.get_password("SSH Jumper", "profile-encryption-v1")
+        if key is None:
+            if decrypt:
+                raise RuntimeError("The profile encryption key is missing from the desktop keyring.")
+            key = Fernet.generate_key().decode("ascii")
+            backend.set_password("SSH Jumper", "profile-encryption-v1", key)
+        cipher = Fernet(key.encode("ascii"))
+        return cipher.decrypt(value) if decrypt else cipher.encrypt(value)
+    except Exception as exc:
+        raise RuntimeError("Could not access protected credentials. Unlock your desktop Secret Service "
+                           "keyring and retry. Saved profiles have not been replaced.") from exc
+
+
+def dpapi_crypt(value: bytes, decrypt=False) -> bytes:
     buffer = ctypes.create_string_buffer(value)
     source = Blob(len(value), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
     result = Blob()
@@ -33,22 +58,28 @@ def crypt(value: bytes, decrypt=False) -> bytes:
         kernel.LocalFree(result.data)
 
 
+def default_profile_path():
+    if os.name == "nt":
+        return Path(os.environ["APPDATA"]) / "SSH Jumper" / "profiles.json"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "ssh-jumper" / "profiles.json"
+
+
 class Store:
     def __init__(self, path=None):
-        self.path = Path(path) if path else Path(os.environ["APPDATA"]) / "SSH Jumper" / "profiles.json"
+        self.path = Path(path) if path else default_profile_path()
 
-    def save(self, profiles):
+    def save(self, profiles, save_credentials=True):
         payload = []
         for profile in profiles:
             item = asdict(profile)
             for hop in item["hops"]:
                 for host in [hop, *hop["alternatives"]]:
                     secret = host.pop("password")
-                    host["protected_password"] = base64.b64encode(crypt(secret.encode())).decode() if secret else ""
+                    host["protected_password"] = base64.b64encode(crypt(secret.encode())).decode() if secret and save_credentials else ""
             for forward in item["forwards"]:
                 if forward["ssh"] is not None:
                     secret = forward["ssh"].pop("password")
-                    forward["ssh"]["protected_password"] = base64.b64encode(crypt(secret.encode())).decode() if secret else ""
+                    forward["ssh"]["protected_password"] = base64.b64encode(crypt(secret.encode())).decode() if secret and save_credentials else ""
             payload.append(item)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
@@ -58,15 +89,31 @@ class Store:
                 if not backup.exists():
                     shutil.copy2(self.path, backup)
         temp = self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps({"version": 5, "profiles": payload}, indent=2), encoding="utf-8")
+        document = {"version": 5 if os.name == "nt" else 6,
+                    "credential_backend": "dpapi" if os.name == "nt" else "secret-service-fernet-v1",
+                    "profiles": payload}
+        temp.write_text(json.dumps(document, indent=2), encoding="utf-8")
+        if os.name != "nt":
+            temp.chmod(0o600)
         temp.replace(self.path)
 
     def load(self):
         if not self.path.exists():
             return []
         data = json.loads(self.path.read_text(encoding="utf-8"))
-        if data.get("version") not in (1, 2, 3, 4, 5):
+        if data.get("version") not in (1, 2, 3, 4, 5, 6):
             raise ValueError("Unsupported profile file version")
+        expected = "dpapi" if os.name == "nt" else "secret-service-fernet-v1"
+        backend = data.get("credential_backend", "dpapi")
+        if backend != expected:
+            # Metadata-only legacy profiles can still be imported.
+            def has_secret(value):
+                if isinstance(value, dict):
+                    return bool(value.get("protected_password")) or any(has_secret(v) for v in value.values())
+                return isinstance(value, list) and any(has_secret(v) for v in value)
+            if has_secret(data["profiles"]):
+                raise ValueError("These credentials belong to another platform. Export metadata without "
+                                 "credentials on the original system, then enter passwords here.")
         profiles = []
         for item in data["profiles"]:
             hops = []

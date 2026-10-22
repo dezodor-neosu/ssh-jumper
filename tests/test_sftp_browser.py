@@ -349,6 +349,9 @@ def test_sync_commands_in_real_bash(tmp_path, monkeypatch, legacy):
 
 @pytest.mark.parametrize("value", ["/bad:name", "/bad\\name", "/trailing.", "/..", "/"])
 def test_local_names_cannot_escape_download_directory(value):
+    if os.name != "nt" and value not in ("/..", "/"):
+        assert local_name(value) == posixpath.basename(value)
+        return
     with pytest.raises(ValueError):
         local_name(value)
 

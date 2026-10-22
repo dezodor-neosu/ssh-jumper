@@ -1,3 +1,4 @@
+import os
 import json
 import copy
 import subprocess
@@ -64,7 +65,7 @@ class HopDialog(QDialog):
         self.port = spin(hop.port)
         self.user = QLineEdit(hop.username)
         self.auth = QComboBox()
-        self.auth.addItems(AUTH_METHODS)
+        self.auth.addItems([m for m in AUTH_METHODS if os.name == "nt" or m != "Pageant"])
         self.auth.setCurrentText(hop.auth)
         self.secret = QLineEdit(hop.password)
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
@@ -102,7 +103,10 @@ class HopDialog(QDialog):
         form.addRow("Authentication", self.auth)
         form.addRow("Password / key passphrase", self.secret)
         form.addRow("Private key (OpenSSH / PEM)", key_row)
-        hint = QLabel("Agent keys stay on this PC. Load PuTTY .ppk keys into Pageant.\nSaved passwords and passphrases are encrypted for your Windows account.")
+        agent_hint = ("Load PuTTY .ppk keys into Pageant." if os.name == "nt"
+                      else "Load SSH keys into your desktop SSH agent.")
+        hint = QLabel("Agent keys stay on this PC. " + agent_hint +
+                      "\nSaved passwords and passphrases use your account’s secure credential storage.")
         hint.setWordWrap(True)
         form.addRow(hint)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -198,7 +202,7 @@ class ForwardDialog(QDialog):
         ssh = forward.ssh or SSHAuth()
         self.user = QLineEdit(ssh.username)
         self.auth = QComboBox()
-        self.auth.addItems(AUTH_METHODS)
+        self.auth.addItems([m for m in AUTH_METHODS if os.name == "nt" or m != "Pageant"])
         self.auth.setCurrentText(ssh.auth)
         self.secret = QLineEdit(ssh.password)
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
@@ -210,7 +214,7 @@ class ForwardDialog(QDialog):
         auth_form.addRow("Authentication", self.auth)
         auth_form.addRow("Password / key passphrase", self.secret)
         auth_form.addRow("Private key (OpenSSH / PEM)", key_row)
-        auth_hint = QLabel("Credentials are saved with Windows encryption. The native terminal and SFTP browser use these endpoint credentials.")
+        auth_hint = QLabel("Credentials are saved with account-bound encryption. The native terminal and SFTP browser use these endpoint credentials.")
         auth_hint.setWordWrap(True)
         auth_form.addRow(auth_hint)
         form.addRow(self.ssh_panel)
@@ -275,7 +279,7 @@ class SettingsDialog(QDialog):
         form.addRow(buttons)
 
     def browse(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select editor", self.editor_path.text(), "Windows executables (*.exe)")
+        path, _ = QFileDialog.getOpenFileName(self, "Select editor", self.editor_path.text(), "Windows executables (*.exe)" if os.name == "nt" else "All files (*)")
         if path:
             self.editor_path.setText(path)
 
@@ -408,9 +412,14 @@ class MainWindow(QMainWindow):
         self.ignore_keys.setChecked(True)
         edit.addWidget(self.reconnect)
         edit.addWidget(self.ignore_keys)
+        self.save_credentials = QCheckBox("Save passwords and key passphrases")
+        self.save_credentials.setChecked(True)
+        self.save_credentials.setToolTip(
+            "Uncheck to keep credentials only for this session. Saving then removes saved credentials from all profiles.")
+        edit.addWidget(self.save_credentials)
         save = button("Save profile", self.save_profile)
         edit.addWidget(save)
-        self.edit_controls.extend([self.name, self.hop_list, self.interval, self.reconnect, self.ignore_keys, save])
+        self.edit_controls.extend([self.name, self.hop_list, self.interval, self.reconnect, self.ignore_keys, self.save_credentials, save])
         splitter.addWidget(self.editor)
         splitter.setSizes([250, 700])
         bottom = QHBoxLayout()
@@ -472,7 +481,7 @@ class MainWindow(QMainWindow):
         has_ssh = selected and self.forwards[index].ssh is not None
         self.client_buttons.setVisible(selected)
         self.terminal_button.setVisible(has_ssh)
-        self.mstsc_button.setVisible(selected and self.forwards[index].target_port == 3389)
+        self.mstsc_button.setVisible(os.name == "nt" and selected and self.forwards[index].target_port == 3389)
         ready = selected and self.connection_status == "Connected"
         self.client_buttons.setEnabled(ready)
         self.client_buttons.setToolTip("Open the selected endpoint through this tunnel" if ready else "Connect the tunnel first")
@@ -597,7 +606,7 @@ class MainWindow(QMainWindow):
             return
         remaining = [p for i, p in enumerate(self.profiles) if i != self.current]
         try:
-            self.store.save(remaining)
+            self.store.save(remaining, save_credentials=self.save_credentials.isChecked())
         except Exception as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
@@ -608,9 +617,10 @@ class MainWindow(QMainWindow):
         try:
             self.capture().validate()
             self.remember()
-            self.store.save(self.profiles)
+            self.store.save(self.profiles, save_credentials=self.save_credentials.isChecked())
             self.profiles_list.item(self.current).setText(self.profiles[self.current].name)
-            self.log("Profiles saved; credentials protected with Windows DPAPI")
+            self.log("Profiles saved; credentials protected with account-bound encryption" if self.save_credentials.isChecked()
+                     else "Profiles saved without credentials; passwords remain in memory for this session")
             return True
         except Exception as exc:
             QMessageBox.warning(self, "Could not save profile", str(exc))

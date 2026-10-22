@@ -1,4 +1,5 @@
-"""Windows releases this process-held handle even after a crash."""
+"""Account-local process lock, automatically released on process termination."""
+import os
 import ctypes
 from ctypes import wintypes
 
@@ -10,6 +11,9 @@ class SingleInstance:
     def __init__(self, name=MUTEX_NAME):
         self.name = name
         self.handle = None
+        if os.name != "nt":
+            self.kernel = None
+            return
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
         self.kernel.CreateMutexW.restype = wintypes.HANDLE
@@ -18,6 +22,21 @@ class SingleInstance:
 
     def acquire(self):
         if self.handle is not None:
+            return True
+        if self.kernel is None:
+            import fcntl
+            import hashlib
+            from .storage import default_profile_path
+            directory = default_profile_path().parent
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / ("instance-" + hashlib.sha256(self.name.encode()).hexdigest()[:16] + ".lock")
+            handle = path.open("a+b")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                handle.close()
+                return False
+            self.handle = handle
             return True
         ctypes.set_last_error(0)
         handle = self.kernel.CreateMutexW(None, False, self.name)
@@ -32,5 +51,8 @@ class SingleInstance:
 
     def close(self):
         if self.handle is not None:
-            self.kernel.CloseHandle(self.handle)
+            if self.kernel is None:
+                self.handle.close()
+            else:
+                self.kernel.CloseHandle(self.handle)
             self.handle = None

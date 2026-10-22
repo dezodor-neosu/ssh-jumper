@@ -2,6 +2,52 @@
 
 A Windows tray application for reaching multiple TCP services through one ordered chain of SSH servers.
 
+## Linux
+
+Linux desktop support uses the same Qt interface, SSH tunnels, native terminal and
+file browser. On Linux, OpenSSH agent authentication uses the session's
+`SSH_AUTH_SOCK`; Pageant and the MSTSC launcher are Windows-only. Select a local
+executable in App settings for external editing.
+
+Install from a checkout with Python 3.10 or newer (subject to the pinned packages'
+Python support):
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python install_linux.py
+```
+
+Launch **SSH Jumper** from the application menu, or run
+`~/.local/bin/ssh-jumper`. This per-user installation runs from the checkout and
+its virtual environment; keep both in place. To update, update the checkout and
+reinstall requirements. Remove `~/.local/bin/ssh-jumper` and
+`~/.local/share/applications/ssh-jumper.desktop` to remove the launchers.
+
+Profiles and settings use `$XDG_CONFIG_HOME/ssh-jumper`, defaulting to
+`~/.config/ssh-jumper`. Passwords and private-key passphrases are authenticated
+Fernet ciphertext in version 6 profiles. The encryption key is stored in the
+login session's Secret Service keyring under service `SSH Jumper`, entry
+`profile-encryption-v1`. A running, unlocked Secret Service provider is required
+when loading or saving nonempty credentials (for example GNOME Keyring, or KDE's
+Secret Service integration). There is no plaintext fallback. If the keyring is
+unavailable, saving fails without replacing the profile. A load failure disables
+profile editing to protect the original file; unlock the keyring and restart.
+Uncheck **Save passwords and key passphrases** to connect without storing secrets;
+saving in this mode clears stored credentials from all profiles while keeping
+them in memory for this session.
+
+Back up the keyring along with profiles: deleting the encryption key makes saved
+Linux credentials unrecoverable. Windows retains DPAPI and version 5 profiles.
+Encrypted credentials cannot be moved between Windows and Linux; transfer a copy
+of the profile metadata with `protected_password` fields cleared and re-enter
+credentials. Private-key paths and editor settings may also need adjustment.
+
+For a standalone Linux bundle, run `./build_linux.sh` on Linux. It runs the tests
+and builds `dist/SSH-Jumper`; the target desktop still needs a Secret Service
+provider and the system libraries required by Qt. Linux distributions and desktop
+sessions should be tested individually. The Windows build remains `build.ps1`.
+
 ## Run
 
 Open `dist/SSH-Jumper/SSH-Jumper.exe` after building. Keep the entire `SSH-Jumper` folder together; Python is bundled. For development, install Python 3.13 and run `./run.ps1` in PowerShell.

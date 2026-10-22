@@ -495,6 +495,7 @@ def test_f4_uses_selected_external_editor(app, tmp_path, monkeypatch, local):
     (root / 'file.ini').write_bytes(b'original')
     executable = tmp_path / 'editor.exe'
     executable.write_bytes(b'editor')
+    executable.chmod(0o700)
     store = SettingsStore(tmp_path / 'settings.json')
     store.save(IntegrationSettings(str(executable), ['--new-window']))
     opened = []

@@ -25,6 +25,10 @@ def safe_remote(path):
 
 def local_name(path):
     name = posixpath.basename(path)
+    if os.name != "nt":
+        if not name or name in (".", "..") or "\x00" in name:
+            raise ValueError(f"Cannot save this filename: {name!r}")
+        return name
     if (not name or name in (".", "..") or any(c in name for c in '<>:"/\\|?*')
             or name.endswith((".", " ")) or any(ord(c) < 32 for c in name)
             or getattr(os.path, "isreserved", lambda _: False)(name)):

@@ -18,8 +18,8 @@ def detect_settings():
 
 def executable(value):
     path = Path(os.path.expandvars(value)).expanduser()
-    if not value or not path.is_file() or path.suffix.lower() != ".exe":
-        raise ValueError("Choose an existing editor .exe file in App settings.")
+    if not value or not path.is_file() or (path.suffix.lower() != ".exe" if os.name == "nt" else not os.access(path, os.X_OK)):
+        raise ValueError("Choose an existing editor executable in App settings.")
     return str(path.resolve())
 
 
