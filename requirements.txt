@@ -1,0 +1,3 @@
+PySide6==6.11.2
+paramiko==5.0.0
+pyte==0.8.2

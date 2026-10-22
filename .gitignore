@@ -1,0 +1,10 @@
+.venv/
+.venv-terminal/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+*.spec
+
+.venv-commander/
+dist-update/
